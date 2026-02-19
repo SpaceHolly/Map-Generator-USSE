@@ -97,9 +97,9 @@ public sealed class SettingsUiBuilder
             var n = new NumericUpDown
             {
                 DecimalPlaces = prop.PropertyType == typeof(double) ? 2 : 0,
-                Increment = (decimal)ParseOrDefault(meta.Step, 1),
-                Minimum = (decimal)ParseOrDefault(meta.Min, 0),
-                Maximum = (decimal)ParseOrDefault(meta.Max, 999999),
+                Increment = (decimal)(meta.Step ?? 1),
+                Minimum = (decimal)(meta.Min ?? 0),
+                Maximum = (decimal)(meta.Max ?? 999999),
                 Dock = DockStyle.Top
             };
             n.Value = Convert.ToDecimal(value);
@@ -108,12 +108,4 @@ public sealed class SettingsUiBuilder
 
         return new TextBox { Text = value?.ToString() ?? string.Empty };
     }
-    private static double ParseOrDefault(string value, double fallback)
-    {
-        return double.TryParse(value, System.Globalization.NumberStyles.Float,
-            System.Globalization.CultureInfo.InvariantCulture, out var parsed)
-            ? parsed
-            : fallback;
-    }
-
 }
