@@ -6,7 +6,7 @@ namespace MapGen.Core.Generation;
 public sealed class GenerationResult
 {
     public required Map Map { get; init; }
-    public List<string> Warnings { get; } = [];
+    public List<string> Warnings { get; } = new();
 }
 
 public sealed class MapGenerator
@@ -24,7 +24,9 @@ public sealed class MapGenerator
         ConnectRooms(map, s);
         ValidateAndFix(map, s, warnings);
 
-        return new GenerationResult { Map = map, Warnings = warnings };
+        var result = new GenerationResult { Map = map };
+        result.Warnings.AddRange(warnings);
+        return result;
     }
 
     private static Map BuildBaseArea(GenerationSettings s)
@@ -193,7 +195,9 @@ public sealed class MapGenerator
             var y = rng.Next(yStart, yEndExclusive);
             candidate = new RectUnits(x, y, w, h);
 
-            if (localRooms.Any(r => Expand(r, s.PaddingUnits).Intersects(candidate))) continue;
+            var cand = candidate;
+            if (localRooms.Any(r => Expand(r, s.PaddingUnits).Intersects(cand))) continue;
+
             localRooms.Add(candidate);
             return true;
         }

@@ -14,17 +14,17 @@ public static class SettingsValidator
             w.Add($"GridStep округлен до {s.GridStep}.");
         }
 
-        ClampInt(ref s.MapWidthUnits, 20, 500, w, nameof(s.MapWidthUnits));
-        ClampInt(ref s.MapHeightUnits, 20, 500, w, nameof(s.MapHeightUnits));
-        ClampInt(ref s.TrunksCount, 0, 5, w, nameof(s.TrunksCount));
-        ClampInt(ref s.BlocksCount, 0, 20, w, nameof(s.BlocksCount));
-        ClampInt(ref s.GatesPerBlockMin, 0, 5, w, nameof(s.GatesPerBlockMin));
-        ClampInt(ref s.GatesPerBlockMax, 0, 8, w, nameof(s.GatesPerBlockMax));
-        ClampInt(ref s.RoomsTotalMin, 0, 500, w, nameof(s.RoomsTotalMin));
-        ClampInt(ref s.RoomsTotalMax, 0, 500, w, nameof(s.RoomsTotalMax));
-        ClampInt(ref s.TechRoomsMin, 0, 300, w, nameof(s.TechRoomsMin));
-        ClampInt(ref s.TechRoomsMax, 0, 300, w, nameof(s.TechRoomsMax));
-        ClampInt(ref s.MinBlockSizeUnits, 8, 80, w, nameof(s.MinBlockSizeUnits));
+        s.MapWidthUnits = ClampInt(s.MapWidthUnits, 20, 500, w, nameof(s.MapWidthUnits));
+        s.MapHeightUnits = ClampInt(s.MapHeightUnits, 20, 500, w, nameof(s.MapHeightUnits));
+        s.TrunksCount = ClampInt(s.TrunksCount, 0, 5, w, nameof(s.TrunksCount));
+        s.BlocksCount = ClampInt(s.BlocksCount, 0, 20, w, nameof(s.BlocksCount));
+        s.GatesPerBlockMin = ClampInt(s.GatesPerBlockMin, 0, 5, w, nameof(s.GatesPerBlockMin));
+        s.GatesPerBlockMax = ClampInt(s.GatesPerBlockMax, 0, 8, w, nameof(s.GatesPerBlockMax));
+        s.RoomsTotalMin = ClampInt(s.RoomsTotalMin, 0, 500, w, nameof(s.RoomsTotalMin));
+        s.RoomsTotalMax = ClampInt(s.RoomsTotalMax, 0, 500, w, nameof(s.RoomsTotalMax));
+        s.TechRoomsMin = ClampInt(s.TechRoomsMin, 0, 300, w, nameof(s.TechRoomsMin));
+        s.TechRoomsMax = ClampInt(s.TechRoomsMax, 0, 300, w, nameof(s.TechRoomsMax));
+        s.MinBlockSizeUnits = ClampInt(s.MinBlockSizeUnits, 8, 80, w, nameof(s.MinBlockSizeUnits));
 
         if (s.GatesPerBlockMax < s.GatesPerBlockMin) { s.GatesPerBlockMax = s.GatesPerBlockMin; w.Add("GatesPerBlockMax поднят до min."); }
         if (s.RoomsTotalMax < s.RoomsTotalMin) { s.RoomsTotalMax = s.RoomsTotalMin; w.Add("RoomsTotalMax поднят до min."); }
@@ -36,10 +36,11 @@ public static class SettingsValidator
         return (s, w);
     }
 
-    private static void ClampInt(ref int value, int min, int max, List<string> warnings, string field)
+    private static int ClampInt(int value, int min, int max, List<string> warnings, string field)
     {
         var old = value;
-        value = Math.Clamp(value, min, max);
-        if (old != value) warnings.Add($"{field} исправлен: {old} -> {value}");
+        var clamped = Math.Clamp(value, min, max);
+        if (old != clamped) warnings.Add($"{field} исправлен: {old} -> {clamped}");
+        return clamped;
     }
 }
