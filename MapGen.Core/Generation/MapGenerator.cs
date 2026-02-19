@@ -140,37 +140,65 @@ public sealed class MapGenerator
         var techTarget = rng.Next(s.TechRoomsMin, s.TechRoomsMax + 1);
         var roomId = 1;
 
-        foreach (var block in map.Blocks)
+        var blockOrder = map.Blocks.OrderBy(_ => rng.Next()).ToList();
+        var localRooms = map.Blocks.ToDictionary(block => block.Id, _ => new List<RectUnits>());
+        var placedTotal = 0;
+
+        while (placedTotal < targetRooms)
         {
-            var roomBudget = Math.Max(1, targetRooms / map.Blocks.Count);
-            var placed = 0;
-            var local = new List<RectUnits>();
+            var placedInRound = false;
 
-            while (placed < roomBudget)
+            foreach (var block in blockOrder)
             {
-                var success = false;
-                for (int a = 0; a < s.AttemptsPerRoom; a++)
-                {
-                    var w = rng.Next(4, Math.Max(5, (int)Math.Min(14, block.Bounds.Width - 2)));
-                    var h = rng.Next(4, Math.Max(5, (int)Math.Min(12, block.Bounds.Height - 2)));
-                    var x = rng.Next((int)block.Bounds.X + 1, (int)block.Bounds.Right - w);
-                    var y = rng.Next((int)block.Bounds.Y + 1, (int)block.Bounds.Bottom - h);
-                    var candidate = new RectUnits(x, y, w, h);
+                if (placedTotal >= targetRooms) break;
 
-                    if (local.Any(r => Expand(r, s.PaddingUnits).Intersects(candidate))) continue;
-                    local.Add(candidate);
-                    var type = roomId <= techTarget ? RoomType.TechRoom : RoomType.Generic;
-                    var room = new Room { Id = roomId++, BlockId = block.Id, RectUnits = candidate, RoomType = type };
-                    block.Rooms.Add(room);
-                    map.Rooms.Add(room);
-                    PaintRect(map, candidate, CellType.Floor);
-                    placed++;
-                    success = true;
-                    break;
+                if (!TryPlaceRoomInBlock(block, localRooms[block.Id], s, rng, out var candidate))
+                {
+                    continue;
                 }
-                if (!success) break;
+
+                var type = roomId <= techTarget ? RoomType.TechRoom : RoomType.Generic;
+                var room = new Room { Id = roomId++, BlockId = block.Id, RectUnits = candidate, RoomType = type };
+                block.Rooms.Add(room);
+                map.Rooms.Add(room);
+                PaintRect(map, candidate, CellType.Floor);
+                placedTotal++;
+                placedInRound = true;
             }
+
+            if (!placedInRound) break;
         }
+    }
+
+    private static bool TryPlaceRoomInBlock(Block block, List<RectUnits> localRooms, GenerationSettings s, Random rng, out RectUnits candidate)
+    {
+        candidate = default;
+
+        var maxWidth = (int)Math.Min(14, block.Bounds.Width - 2);
+        var maxHeight = (int)Math.Min(12, block.Bounds.Height - 2);
+        if (maxWidth < 4 || maxHeight < 4) return false;
+
+        for (int a = 0; a < s.AttemptsPerRoom; a++)
+        {
+            var w = rng.Next(4, maxWidth + 1);
+            var h = rng.Next(4, maxHeight + 1);
+
+            var xStart = (int)block.Bounds.X + 1;
+            var xEndExclusive = (int)block.Bounds.Right - w;
+            var yStart = (int)block.Bounds.Y + 1;
+            var yEndExclusive = (int)block.Bounds.Bottom - h;
+            if (xStart >= xEndExclusive || yStart >= yEndExclusive) continue;
+
+            var x = rng.Next(xStart, xEndExclusive);
+            var y = rng.Next(yStart, yEndExclusive);
+            candidate = new RectUnits(x, y, w, h);
+
+            if (localRooms.Any(r => Expand(r, s.PaddingUnits).Intersects(candidate))) continue;
+            localRooms.Add(candidate);
+            return true;
+        }
+
+        return false;
     }
 
     private static RectUnits Expand(RectUnits r, int pad) => new(r.X - pad, r.Y - pad, r.Width + pad * 2, r.Height + pad * 2);
