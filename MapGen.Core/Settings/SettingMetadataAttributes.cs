@@ -17,13 +17,11 @@ public enum SettingCategory
 [AttributeUsage(AttributeTargets.Property)]
 public sealed class SettingMetadataAttribute : Attribute
 {
-    public SettingImportance Importance { get; set; } = SettingImportance.Required;
-    public SettingCategory Category { get; set; } = SettingCategory.Grid;
-    public string DisplayName { get; set; } = string.Empty;
-    public string Description { get; set; } = string.Empty;
-    // В атрибутах .NET недопустимы Nullable<T> в именованных аргументах,
-    // поэтому используем NaN как "значение не задано".
-    public double Min { get; set; } = double.NaN;
-    public double Max { get; set; } = double.NaN;
-    public double Step { get; set; } = double.NaN;
+    public SettingImportance Importance { get; init; } = SettingImportance.Required;
+    public SettingCategory Category { get; init; } = SettingCategory.Grid;
+    public string DisplayName { get; init; } = string.Empty;
+    public string Description { get; init; } = string.Empty;
+    public double? Min { get; init; }
+    public double? Max { get; init; }
+    public double? Step { get; init; }
 }
