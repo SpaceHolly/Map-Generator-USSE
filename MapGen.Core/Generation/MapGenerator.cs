@@ -232,7 +232,18 @@ public sealed class MapGenerator
             var y = rng.Next(yStart, yEndExclusive);
             candidate = new RectUnits(x, y, w, h);
 
-            if (localRooms.Any(r => Expand(r, s.PaddingUnits).Intersects(candidate))) continue;
+            bool hasIntersection = false;
+            foreach (var r in localRooms)
+            {
+                if (Expand(r, s.PaddingUnits).Intersects(candidate))
+                {
+                    hasIntersection = true;
+                    break;
+                }
+            }
+            
+            if (hasIntersection)
+                continue;
 
             localRooms.Add(candidate);
             return true;
