@@ -97,9 +97,9 @@ public sealed class SettingsUiBuilder
             var n = new NumericUpDown
             {
                 DecimalPlaces = prop.PropertyType == typeof(double) ? 2 : 0,
-                Increment = (decimal)(meta.Step ?? 1),
-                Minimum = (decimal)(meta.Min ?? 0),
-                Maximum = (decimal)(meta.Max ?? 999999),
+                Increment = (decimal)(double.IsNaN(meta.Step) ? 1.0 : meta.Step),
+                Minimum = (decimal)(double.IsNaN(meta.Min) ? 0.0 : meta.Min),
+                Maximum = (decimal)(double.IsNaN(meta.Max) ? 999999.0 : meta.Max),
                 Dock = DockStyle.Top
             };
             n.Value = Convert.ToDecimal(value);
