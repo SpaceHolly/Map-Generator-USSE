@@ -21,7 +21,8 @@ public sealed class SettingMetadataAttribute : Attribute
     public SettingCategory Category { get; init; } = SettingCategory.Grid;
     public string DisplayName { get; init; } = string.Empty;
     public string Description { get; init; } = string.Empty;
-    public double? Min { get; init; }
-    public double? Max { get; init; }
-    public double? Step { get; init; }
+    public double Min { get; set; } = double.NaN;
+    public double Max { get; set; } = double.NaN;
+    public double Step { get; set; } = double.NaN;
+
 }
