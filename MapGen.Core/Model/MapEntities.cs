@@ -2,6 +2,7 @@ namespace MapGen.Core.Model;
 
 public enum CellType { Empty, Wall, Floor, Corridor, Door, Gate }
 public enum RoomType { Generic, TechRoom, Storage, Workshop, Hangar, Transition, CorridorSpace }
+public enum ConnectorDirection { None, North, East, South, West }
 
 public sealed class Map
 {
@@ -27,7 +28,8 @@ public sealed class Block
 
 public sealed class Room
 {
-    public int Id { get; set; }
+    public int Id { get; internal set; }
+    public Guid Uid { get; internal set; }
     public int BlockId { get; set; }
     public RoomType RoomType { get; set; }
     public RectUnits RectUnits { get; set; }
@@ -46,6 +48,7 @@ public sealed class Door
     public int BlockId { get; set; }
     public int RoomId { get; set; }
     public PointUnits Position { get; set; }
+    public ConnectorDirection Direction { get; set; } = ConnectorDirection.None;
 }
 
 public sealed class Corridor
