@@ -17,6 +17,9 @@ public sealed class GenerationSettings
     [SettingMetadata(Importance = SettingImportance.Required, Category = SettingCategory.Grid, DisplayName = "Высота карты", Description = "В units", Min = 20, Max = 500, Step = 1)]
     public int MapHeightUnits { get; set; } = 80;
 
+    [SettingMetadata(Importance = SettingImportance.Required, Category = SettingCategory.Grid, DisplayName = "Авторазмер карты", Description = "Подбирать размер автоматически")]
+    public bool AutoMapSize { get; set; } = true;
+
     [SettingMetadata(Importance = SettingImportance.Required, Category = SettingCategory.Trunk, DisplayName = "Кол-во магистралей", Description = "Основные trunk-линии", Min = 0, Max = 5, Step = 1)]
     public int TrunksCount { get; set; } = 1;
 
@@ -32,11 +35,14 @@ public sealed class GenerationSettings
     [SettingMetadata(Importance = SettingImportance.Required, Category = SettingCategory.Blocks, DisplayName = "Gates на блок (макс)", Description = "Максимум", Min = 0, Max = 8, Step = 1)]
     public int GatesPerBlockMax { get; set; } = 2;
 
-    [SettingMetadata(Importance = SettingImportance.Required, Category = SettingCategory.Rooms, DisplayName = "Комнат всего (мин)", Description = "На всю карту", Min = 0, Max = 500, Step = 1)]
-    public int RoomsTotalMin { get; set; } = 20;
+    [SettingMetadata(Importance = SettingImportance.Required, Category = SettingCategory.Rooms, DisplayName = "Комнат всего", Description = "На всю карту", Min = 0, Max = 500, Step = 1)]
+    public int RoomsCount { get; set; } = 28;
 
-    [SettingMetadata(Importance = SettingImportance.Required, Category = SettingCategory.Rooms, DisplayName = "Комнат всего (макс)", Description = "На всю карту", Min = 0, Max = 500, Step = 1)]
-    public int RoomsTotalMax { get; set; } = 35;
+    [SettingMetadata(Importance = SettingImportance.Advanced, Category = SettingCategory.Rooms, DisplayName = "Комнат всего (мин, legacy)", Description = "Совместимость", Min = 0, Max = 500, Step = 1)]
+    public int RoomsTotalMin { get; set; } = 28;
+
+    [SettingMetadata(Importance = SettingImportance.Advanced, Category = SettingCategory.Rooms, DisplayName = "Комнат всего (макс, legacy)", Description = "Совместимость", Min = 0, Max = 500, Step = 1)]
+    public int RoomsTotalMax { get; set; } = 28;
 
     [SettingMetadata(Importance = SettingImportance.Required, Category = SettingCategory.Tech, DisplayName = "Техкомнат (мин)", Description = "На карту", Min = 0, Max = 300, Step = 1)]
     public int TechRoomsMin { get; set; } = 3;
@@ -70,6 +76,24 @@ public sealed class GenerationSettings
 
     [SettingMetadata(Importance = SettingImportance.Advanced, Category = SettingCategory.Rooms, DisplayName = "Padding комнат", Description = "Отступ от соседей", Min = 0, Max = 5, Step = 1)]
     public int PaddingUnits { get; set; } = 1;
+
+    [SettingMetadata(Importance = SettingImportance.Advanced, Category = SettingCategory.Rooms, DisplayName = "Макс степень комнаты", Description = "Макс. число коридоров от комнаты", Min = 1, Max = 6, Step = 1)]
+    public int MaxRoomDegree { get; set; } = 3;
+
+    [SettingMetadata(Importance = SettingImportance.Advanced, Category = SettingCategory.Validation, DisplayName = "Доля доп. связей", Description = "0..0.2 от числа комнат", Min = 0, Max = 0.2, Step = 0.01)]
+    public double ExtraConnectionPercent { get; set; } = 0.05;
+
+    [SettingMetadata(Importance = SettingImportance.Advanced, Category = SettingCategory.Grid, DisplayName = "Соотношение сторон", Description = "Ширина/высота", Min = 0.5, Max = 3, Step = 0.05)]
+    public double AutoSizeAspectRatio { get; set; } = 4.0 / 3.0;
+
+    [SettingMetadata(Importance = SettingImportance.Advanced, Category = SettingCategory.Grid, DisplayName = "Мин целевой occupancy", Description = "0..1", Min = 0.1, Max = 0.8, Step = 0.01)]
+    public double TargetOccupancyMin { get; set; } = 0.25;
+
+    [SettingMetadata(Importance = SettingImportance.Advanced, Category = SettingCategory.Grid, DisplayName = "Макс целевой occupancy", Description = "0..1", Min = 0.1, Max = 0.9, Step = 0.01)]
+    public double TargetOccupancyMax { get; set; } = 0.45;
+
+    [SettingMetadata(Importance = SettingImportance.Advanced, Category = SettingCategory.Grid, DisplayName = "Итерации автоподбора", Description = "3..6", Min = 3, Max = 6, Step = 1)]
+    public int AutoSizeMaxAttempts { get; set; } = 4;
 
     [SettingMetadata(Importance = SettingImportance.Advanced, Category = SettingCategory.Validation, DisplayName = "Проверять связность", Description = "BFS от входа")]
     public bool ValidateConnectivity { get; set; } = true;

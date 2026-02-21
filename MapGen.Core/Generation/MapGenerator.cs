@@ -21,6 +21,7 @@ internal sealed class GenerationContext
 }
 
 internal readonly record struct RouteNode(int X, int Y, int Direction);
+internal readonly record struct DoorCandidate(int X, int Y, ConnectorDirection Direction, int NormalDx, int NormalDy);
 
 public sealed class MapGenerator
 {
@@ -36,45 +37,122 @@ public sealed class MapGenerator
     {
         var (s, warnings) = SettingsValidator.ValidateAndClamp(settings);
         var rng = new Random(seed ?? s.Seed);
-        var context = new GenerationContext();
 
-        var map = BuildBaseArea(s);
+        var (width, height) = s.AutoMapSize && s.Setting != Setting.Train
+            ? EstimateInitialMapSize(s)
+            : (s.MapWidthUnits, s.MapHeightUnits);
 
-        if (s.Setting == Setting.Train)
+        Map? bestMap = null;
+        double bestDistance = double.MaxValue;
+
+        var attempts = s.AutoMapSize && s.Setting != Setting.Train ? s.AutoSizeMaxAttempts : 1;
+        for (var attempt = 0; attempt < attempts; attempt++)
         {
-            GenerateTrainLayout(map, s, rng, context);
+            var context = new GenerationContext();
+            var map = BuildBaseArea(s, width, height);
+
+            if (s.Setting == Setting.Train)
+            {
+                GenerateTrainLayout(map, s, rng, context);
+            }
+            else
+            {
+                GenerateTrunks(map, s, rng);
+                SplitBlocks(map, s, rng);
+                PlaceGates(map, s, rng);
+                PlaceRooms(map, s, rng, context);
+                ConnectRooms(map, s, rng);
+            }
+
+            ValidateAndFix(map, s, warnings, rng);
+            var occupancy = ComputeOccupancy(map);
+            var occupancyDistance = OccupancyDistance(occupancy, s.TargetOccupancyMin, s.TargetOccupancyMax);
+            if (bestMap is null || occupancyDistance < bestDistance)
+            {
+                bestMap = map;
+                bestDistance = occupancyDistance;
+            }
+
+            if (!s.AutoMapSize || s.Setting == Setting.Train)
+            {
+                break;
+            }
+
+            var tooDense = occupancy > s.TargetOccupancyMax || map.Rooms.Any(r => r.Doors.Count == 0);
+            var tooSparse = occupancy < s.TargetOccupancyMin;
+            if (!tooDense && !tooSparse)
+            {
+                break;
+            }
+
+            var scale = tooDense ? 1.15 : 0.9;
+            width = Math.Clamp((int)Math.Round(width * scale), 20, 500);
+            height = Math.Clamp((int)Math.Round(height * scale), 20, 500);
         }
-        else
+
+        var result = new GenerationResult { Map = bestMap ?? BuildBaseArea(s, s.MapWidthUnits, s.MapHeightUnits) };
+        if (s.AutoMapSize)
         {
-            GenerateTrunks(map, s, rng);
-            SplitBlocks(map, s, rng);
-            PlaceGates(map, s, rng);
-            PlaceRooms(map, s, rng, context);
+            warnings.Add($"AutoMapSize: итоговый размер {result.Map.WidthUnits}x{result.Map.HeightUnits}.");
         }
 
-        ConnectRooms(map, s, rng);
-        ValidateAndFix(map, s, warnings);
-
-        var result = new GenerationResult { Map = map };
         result.Warnings.AddRange(warnings);
         return result;
     }
 
-    private static Map BuildBaseArea(GenerationSettings s)
+    private static (int width, int height) EstimateInitialMapSize(GenerationSettings s)
+    {
+        var expectedRooms = Math.Max(1, s.RoomsCount);
+        var avgRoomArea = 48.0;
+        var roomArea = expectedRooms * avgRoomArea;
+        var corridorReserve = roomArea * 0.35;
+        var bufferReserve = expectedRooms * Math.Pow(s.CorridorWidthUnits + s.PaddingUnits + 1, 2);
+        var targetOccupancy = Math.Clamp((s.TargetOccupancyMin + s.TargetOccupancyMax) / 2.0, 0.2, 0.7);
+        var totalArea = (roomArea + corridorReserve + bufferReserve) / targetOccupancy;
+
+        var ratio = Math.Clamp(s.AutoSizeAspectRatio, 0.5, 3.0);
+        var width = (int)Math.Round(Math.Sqrt(totalArea * ratio));
+        var height = (int)Math.Round(width / ratio);
+
+        return (Math.Clamp(width, 20, 500), Math.Clamp(height, 20, 500));
+    }
+
+    private static double ComputeOccupancy(Map map)
+    {
+        var used = 0;
+        for (var y = 0; y < map.HeightUnits; y++)
+        for (var x = 0; x < map.WidthUnits; x++)
+        {
+            var c = map.Cells[x, y];
+            if (c is CellType.Floor or CellType.Corridor or CellType.Door) used++;
+        }
+
+        return used / (double)(map.WidthUnits * map.HeightUnits);
+    }
+
+    private static double OccupancyDistance(double occupancy, double min, double max)
+    {
+        if (occupancy < min) return min - occupancy;
+        if (occupancy > max) return occupancy - max;
+        return 0;
+    }
+
+    private static Map BuildBaseArea(GenerationSettings s, int width, int height)
     {
         return new Map
         {
-            WidthUnits = s.MapWidthUnits,
-            HeightUnits = s.MapHeightUnits,
+            WidthUnits = width,
+            HeightUnits = height,
             GridStep = s.GridStep,
-            Cells = new CellType[s.MapWidthUnits, s.MapHeightUnits],
-            Entrance = new PointUnits(0, s.MapHeightUnits / 2.0)
+            Cells = new CellType[width, height],
+            Entrance = new PointUnits(0, height / 2.0)
         };
     }
 
     private static void GenerateTrunks(Map map, GenerationSettings s, Random rng)
     {
-        for (int i = 0; i < s.TrunksCount; i++)
+        var trunks = Math.Min(s.TrunksCount, 1);
+        for (int i = 0; i < trunks; i++)
         {
             var polyline = new List<PointUnits> { new(0, map.HeightUnits / 2.0 + i * 2) };
             var cur = polyline[0];
@@ -138,10 +216,7 @@ public sealed class MapGenerator
             }
         }
 
-        for (var i = 0; i < rects.Count; i++)
-        {
-            map.Blocks.Add(new Block { Id = i + 1, Bounds = rects[i] });
-        }
+        for (var i = 0; i < rects.Count; i++) map.Blocks.Add(new Block { Id = i + 1, Bounds = rects[i] });
     }
 
     private static void PlaceGates(Map map, GenerationSettings s, Random rng)
@@ -171,7 +246,7 @@ public sealed class MapGenerator
     {
         if (map.Blocks.Count == 0) return;
 
-        var targetRooms = rng.Next(s.RoomsTotalMin, s.RoomsTotalMax + 1);
+        var targetRooms = s.RoomsCount;
         var techTarget = rng.Next(s.TechRoomsMin, s.TechRoomsMax + 1);
 
         var blockOrder = map.Blocks.OrderBy(_ => rng.Next()).ToList();
@@ -181,15 +256,10 @@ public sealed class MapGenerator
         while (placedTotal < targetRooms)
         {
             var placedInRound = false;
-
             foreach (var block in blockOrder)
             {
                 if (placedTotal >= targetRooms) break;
-
-                if (!TryPlaceRoomInBlock(block, localRooms[block.Id], s, rng, out var candidate))
-                {
-                    continue;
-                }
+                if (!TryPlaceRoomInBlock(block, localRooms[block.Id], s, rng, out var candidate)) continue;
 
                 var room = new Room
                 {
@@ -212,7 +282,6 @@ public sealed class MapGenerator
     private static bool TryPlaceRoomInBlock(Block block, List<RectUnits> localRooms, GenerationSettings s, Random rng, out RectUnits candidate)
     {
         candidate = default;
-
         var maxWidth = (int)Math.Min(14, block.Bounds.Width - 2);
         var maxHeight = (int)Math.Min(12, block.Bounds.Height - 2);
         if (maxWidth < 4 || maxHeight < 4) return false;
@@ -221,7 +290,6 @@ public sealed class MapGenerator
         {
             var w = rng.Next(4, maxWidth + 1);
             var h = rng.Next(4, maxHeight + 1);
-
             var xStart = (int)block.Bounds.X + 1;
             var xEndExclusive = (int)block.Bounds.Right - w;
             var yStart = (int)block.Bounds.Y + 1;
@@ -232,19 +300,7 @@ public sealed class MapGenerator
             var y = rng.Next(yStart, yEndExclusive);
             candidate = new RectUnits(x, y, w, h);
 
-            bool hasIntersection = false;
-            foreach (var r in localRooms)
-            {
-                if (Expand(r, s.PaddingUnits).Intersects(candidate))
-                {
-                    hasIntersection = true;
-                    break;
-                }
-            }
-            
-            if (hasIntersection)
-                continue;
-
+            if (localRooms.Any(r => Expand(r, s.PaddingUnits).Intersects(candidate))) continue;
             localRooms.Add(candidate);
             return true;
         }
@@ -258,108 +314,243 @@ public sealed class MapGenerator
     {
         if (map.Rooms.Count <= 1) return;
 
-        var graphEdges = BuildMstWithExtraEdges(map.Rooms, rng);
-        var corridors = new List<Corridor>();
+        var roomDoors = map.Rooms.ToDictionary(r => r.Id, r => BuildDoorCandidates(map, r));
+        var roomBuffer = BuildRoomBufferMap(map, s.CorridorWidthUnits);
+        var edges = BuildConnectionGraph(map, s, rng);
 
-        foreach (var (roomA, roomB) in graphEdges)
+        foreach (var (roomA, roomB) in edges)
         {
-            var start = PickConnectorPoint(roomA, roomB);
-            var end = PickConnectorPoint(roomB, roomA);
+            if (roomDoors[roomA.Id].Count == 0 || roomDoors[roomB.Id].Count == 0) continue;
 
-            var startCell = ((int)Math.Round(start.X), (int)Math.Round(start.Y));
-            var endCell = ((int)Math.Round(end.X), (int)Math.Round(end.Y));
-
-            if (!TryBuildRoute(map, startCell, endCell, out var path))
-            {
-                continue;
-            }
-
-            var routePoints = path.Select(p => new PointUnits(p.x, p.y)).ToList();
-            corridors.Add(new Corridor { Polyline = routePoints, WidthUnits = s.CorridorWidthUnits, IsTech = roomA.RoomType == RoomType.TechRoom || roomB.RoomType == RoomType.TechRoom });
-            RasterizePolyline(map, routePoints, s.CorridorWidthUnits, CellType.Corridor, false);
-
-            AddDoorForRoute(map, roomA, path[0], path.Count > 1 ? path[1] : path[0]);
-            AddDoorForRoute(map, roomB, path[^1], path.Count > 1 ? path[^2] : path[^1]);
+            if (!TryConnectRoomsDoorToDoor(map, s, roomA, roomB, roomDoors[roomA.Id], roomDoors[roomB.Id], roomBuffer)) continue;
         }
-
-        map.Corridors.AddRange(corridors);
     }
 
-    private static List<(Room a, Room b)> BuildMstWithExtraEdges(List<Room> rooms, Random rng)
+    private static bool[,] BuildRoomBufferMap(Map map, int corridorWidth)
     {
-        var connected = new HashSet<int> { 0 };
+        var buffer = new bool[map.WidthUnits, map.HeightUnits];
+        var radius = Math.Max(0, (corridorWidth - 1) / 2);
+        foreach (var room in map.Rooms)
+        {
+            for (var y = (int)room.RectUnits.Y - radius; y < (int)room.RectUnits.Bottom + radius; y++)
+            for (var x = (int)room.RectUnits.X - radius; x < (int)room.RectUnits.Right + radius; x++)
+            {
+                if (!IsInside(map, x, y)) continue;
+                buffer[x, y] = true;
+            }
+        }
+
+        return buffer;
+    }
+
+    private static List<(Room a, Room b)> BuildConnectionGraph(Map map, GenerationSettings s, Random rng)
+    {
+        var rooms = map.Rooms;
+        var roomIndex = rooms.Select((room, index) => (room, index)).ToDictionary(x => x.room.Id, x => x.index);
+        var degree = new int[rooms.Count];
         var edges = new List<(int a, int b)>();
+        var connected = new HashSet<int> { 0 };
 
         while (connected.Count < rooms.Count)
         {
-            var best = (-1, -1);
-            var bestDistance = double.MaxValue;
+            (int a, int b, double d)? best = null;
             foreach (var a in connected)
             {
                 for (var b = 0; b < rooms.Count; b++)
                 {
                     if (connected.Contains(b)) continue;
                     var d = ManhattanDistance(rooms[a].RectUnits.Center, rooms[b].RectUnits.Center);
-                    if (d < bestDistance)
-                    {
-                        bestDistance = d;
-                        best = (a, b);
-                    }
+                    var degreeOk = degree[a] < s.MaxRoomDegree && degree[b] < s.MaxRoomDegree;
+                    if (!degreeOk && connected.Count < rooms.Count - 1) continue;
+                    if (best is null || d < best.Value.d) best = (a, b, d);
                 }
             }
 
-            if (best.Item1 < 0) break;
-            edges.Add(best);
-            connected.Add(best.Item2);
+            if (best is null) break;
+            edges.Add((best.Value.a, best.Value.b));
+            degree[best.Value.a]++;
+            degree[best.Value.b]++;
+            connected.Add(best.Value.b);
         }
 
-        var extras = new List<(int a, int b)>();
+        var allPairs = new List<(int a, int b, double d)>();
         for (var i = 0; i < rooms.Count; i++)
+        for (var j = i + 1; j < rooms.Count; j++)
         {
-            for (var j = i + 1; j < rooms.Count; j++)
-            {
-                if (edges.Any(e => (e.a == i && e.b == j) || (e.a == j && e.b == i))) continue;
-                extras.Add((i, j));
-            }
+            if (edges.Any(e => (e.a == i && e.b == j) || (e.a == j && e.b == i))) continue;
+            var d = ManhattanDistance(rooms[i].RectUnits.Center, rooms[j].RectUnits.Center);
+            allPairs.Add((i, j, d));
         }
 
-        var extraCount = (int)Math.Ceiling(extras.Count * (0.1 + rng.NextDouble() * 0.2));
-        foreach (var extra in extras.OrderBy(_ => rng.Next()).Take(extraCount)) edges.Add(extra);
+        var density = rooms.Count / (double)(map.WidthUnits * map.HeightUnits);
+        var densityScale = Math.Clamp(1.0 - density * 20.0, 0.15, 1.0);
+        var percentLimit = (int)Math.Floor(rooms.Count * s.ExtraConnectionPercent);
+        var baseLimit = Math.Max(1, rooms.Count / 20);
+        if (rooms.Count < 10) baseLimit = 0;
+        var extraLimit = Math.Min(baseLimit, percentLimit == 0 ? baseLimit : percentLimit);
+        extraLimit = (int)Math.Floor(extraLimit * densityScale);
+
+        foreach (var edge in allPairs.OrderBy(p => p.d).ThenBy(_ => rng.Next()))
+        {
+            if (extraLimit <= 0) break;
+            if (degree[edge.a] >= s.MaxRoomDegree || degree[edge.b] >= s.MaxRoomDegree) continue;
+            edges.Add((edge.a, edge.b));
+            degree[edge.a]++;
+            degree[edge.b]++;
+            extraLimit--;
+        }
 
         return edges.Select(e => (rooms[e.a], rooms[e.b])).ToList();
     }
 
-    private static PointUnits PickConnectorPoint(Room source, Room target)
+    private static bool TryConnectRoomsDoorToDoor(
+        Map map,
+        GenerationSettings s,
+        Room roomA,
+        Room roomB,
+        List<DoorCandidate> candidatesA,
+        List<DoorCandidate> candidatesB,
+        bool[,] roomBuffer)
     {
-        var sourceCenter = source.RectUnits.Center;
-        var targetCenter = target.RectUnits.Center;
+        var pairs =
+            (from doorA in candidatesA
+             from doorB in candidatesB
+             let distance = Math.Abs(doorA.X - doorB.X) + Math.Abs(doorA.Y - doorB.Y)
+             orderby distance
+             select (doorA, doorB)).Take(16);
 
-        var dx = targetCenter.X - sourceCenter.X;
-        var dy = targetCenter.Y - sourceCenter.Y;
-
-        if (Math.Abs(dx) >= Math.Abs(dy))
+        foreach (var (doorA, doorB) in pairs)
         {
-            var x = dx >= 0 ? source.RectUnits.Right : source.RectUnits.X;
-            return new PointUnits(x, Math.Clamp(Math.Round(sourceCenter.Y), source.RectUnits.Y, source.RectUnits.Bottom - 1));
+            var start = (doorA.X + doorA.NormalDx, doorA.Y + doorA.NormalDy);
+            var end = (doorB.X + doorB.NormalDx, doorB.Y + doorB.NormalDy);
+            if (!IsInside(map, start.Item1, start.Item2) || !IsInside(map, end.Item1, end.Item2)) continue;
+
+            if (!TryBuildRoute(map, start, end, roomBuffer, (doorA.X, doorA.Y), (doorB.X, doorB.Y), out var corePath)) continue;
+
+            var fullPath = new List<(int x, int y)> { (doorA.X, doorA.Y) };
+            fullPath.AddRange(corePath);
+            fullPath.Add((doorB.X, doorB.Y));
+
+            if (!TryCarveCorridor(map, fullPath, s.CorridorWidthUnits, roomBuffer, (doorA.X, doorA.Y), (doorB.X, doorB.Y)))
+            {
+                var forbidden = BuildCarveFootprint(fullPath, s.CorridorWidthUnits);
+                if (!TryAStar(map, start, end, roomBuffer, (doorA.X, doorA.Y), (doorB.X, doorB.Y), forbidden, out corePath)) continue;
+                fullPath = new List<(int x, int y)> { (doorA.X, doorA.Y) };
+                fullPath.AddRange(corePath);
+                fullPath.Add((doorB.X, doorB.Y));
+                if (!TryCarveCorridor(map, fullPath, s.CorridorWidthUnits, roomBuffer, (doorA.X, doorA.Y), (doorB.X, doorB.Y))) continue;
+            }
+
+            var routePoints = fullPath.Select(p => new PointUnits(p.x, p.y)).ToList();
+            map.Corridors.Add(new Corridor
+            {
+                Polyline = routePoints,
+                WidthUnits = s.CorridorWidthUnits,
+                IsTech = roomA.RoomType == RoomType.TechRoom || roomB.RoomType == RoomType.TechRoom
+            });
+
+            AddDoor(map, roomA, doorA);
+            AddDoor(map, roomB, doorB);
+            return true;
         }
 
-        var y = dy >= 0 ? source.RectUnits.Bottom : source.RectUnits.Y;
-        return new PointUnits(Math.Clamp(Math.Round(sourceCenter.X), source.RectUnits.X, source.RectUnits.Right - 1), y);
+        return false;
     }
 
-    private static bool TryBuildRoute(Map map, (int x, int y) start, (int x, int y) end, out List<(int x, int y)> path)
+    private static HashSet<(int x, int y)> BuildCarveFootprint(List<(int x, int y)> path, int width)
     {
-        if (TryBuildLRoute(map, start, end, out path)) return true;
-        return TryAStar(map, start, end, out path);
+        var blocked = new HashSet<(int x, int y)>();
+        var radius = Math.Max(0, (width - 1) / 2);
+        foreach (var (x, y) in path)
+        for (var oy = -radius; oy <= radius; oy++)
+        for (var ox = -radius; ox <= radius; ox++)
+            blocked.Add((x + ox, y + oy));
+
+        return blocked;
     }
 
-    private static bool TryBuildLRoute(Map map, (int x, int y) start, (int x, int y) end, out List<(int x, int y)> path)
+    private static bool TryCarveCorridor(Map map, List<(int x, int y)> path, int width, bool[,] roomBuffer, params (int x, int y)[] allowedDoorCells)
+    {
+        var doorSet = allowedDoorCells.ToHashSet();
+        var footprint = BuildCarveFootprint(path, width);
+
+        foreach (var (x, y) in footprint)
+        {
+            if (!IsInside(map, x, y)) return false;
+            if (doorSet.Contains((x, y))) continue;
+            var cell = map.Cells[x, y];
+            if (cell is CellType.Floor or CellType.Wall or CellType.Gate or CellType.Door) return false;
+            if (roomBuffer[x, y]) return false;
+        }
+
+        foreach (var (x, y) in footprint)
+        {
+            if (doorSet.Contains((x, y))) continue;
+            map.Cells[x, y] = CellType.Corridor;
+        }
+
+        return true;
+    }
+
+    private static List<DoorCandidate> BuildDoorCandidates(Map map, Room room)
+    {
+        var candidates = new List<DoorCandidate>();
+
+        for (var x = (int)room.RectUnits.X; x < (int)room.RectUnits.Right; x++)
+        {
+            TryAddDoor(map, room, x, (int)room.RectUnits.Y - 1, ConnectorDirection.North, 0, -1, candidates);
+            TryAddDoor(map, room, x, (int)room.RectUnits.Bottom, ConnectorDirection.South, 0, 1, candidates);
+        }
+
+        for (var y = (int)room.RectUnits.Y; y < (int)room.RectUnits.Bottom; y++)
+        {
+            TryAddDoor(map, room, (int)room.RectUnits.X - 1, y, ConnectorDirection.West, -1, 0, candidates);
+            TryAddDoor(map, room, (int)room.RectUnits.Right, y, ConnectorDirection.East, 1, 0, candidates);
+        }
+
+        return candidates.Distinct().ToList();
+    }
+
+    private static void TryAddDoor(Map map, Room room, int x, int y, ConnectorDirection direction, int nx, int ny, List<DoorCandidate> candidates)
+    {
+        if (!IsInside(map, x, y)) return;
+        if (ContainsRoomCell(room, x, y)) return;
+        if (map.Rooms.Any(r => r.Id != room.Id && ContainsRoomCell(r, x, y))) return;
+        if (map.Cells[x, y] == CellType.Wall) return;
+
+        candidates.Add(new DoorCandidate(x, y, direction, nx, ny));
+    }
+
+    private static bool ContainsRoomCell(Room room, int x, int y)
+        => x >= room.RectUnits.X && x < room.RectUnits.Right && y >= room.RectUnits.Y && y < room.RectUnits.Bottom;
+
+    private static bool TryBuildRoute(
+        Map map,
+        (int x, int y) start,
+        (int x, int y) end,
+        bool[,] roomBuffer,
+        (int x, int y) startDoor,
+        (int x, int y) endDoor,
+        out List<(int x, int y)> path)
+    {
+        if (TryBuildLRoute(map, start, end, roomBuffer, startDoor, endDoor, out path)) return true;
+        return TryAStar(map, start, end, roomBuffer, startDoor, endDoor, null, out path);
+    }
+
+    private static bool TryBuildLRoute(
+        Map map,
+        (int x, int y) start,
+        (int x, int y) end,
+        bool[,] roomBuffer,
+        (int x, int y) startDoor,
+        (int x, int y) endDoor,
+        out List<(int x, int y)> path)
     {
         var pivots = new[] { (start.x, end.y), (end.x, start.y) };
         foreach (var pivot in pivots)
         {
-            if (!TryBuildStraightSegment(map, start, pivot, out var first)) continue;
-            if (!TryBuildStraightSegment(map, pivot, end, out var second)) continue;
+            if (!TryBuildStraightSegment(map, start, pivot, roomBuffer, startDoor, endDoor, out var first)) continue;
+            if (!TryBuildStraightSegment(map, pivot, end, roomBuffer, startDoor, endDoor, out var second)) continue;
 
             first.AddRange(second.Skip(1));
             path = first;
@@ -370,7 +561,14 @@ public sealed class MapGenerator
         return false;
     }
 
-    private static bool TryBuildStraightSegment(Map map, (int x, int y) a, (int x, int y) b, out List<(int x, int y)> segment)
+    private static bool TryBuildStraightSegment(
+        Map map,
+        (int x, int y) a,
+        (int x, int y) b,
+        bool[,] roomBuffer,
+        (int x, int y) startDoor,
+        (int x, int y) endDoor,
+        out List<(int x, int y)> segment)
     {
         segment = [];
         if (a.x != b.x && a.y != b.y) return false;
@@ -385,14 +583,22 @@ public sealed class MapGenerator
         {
             cx += dx;
             cy += dy;
-            if (!IsWalkable(map, cx, cy, allowDoor: true)) return false;
+            if (!IsWalkable(map, cx, cy, roomBuffer, startDoor, endDoor)) return false;
             segment.Add((cx, cy));
         }
 
         return true;
     }
 
-    private static bool TryAStar(Map map, (int x, int y) start, (int x, int y) end, out List<(int x, int y)> path)
+    private static bool TryAStar(
+        Map map,
+        (int x, int y) start,
+        (int x, int y) end,
+        bool[,] roomBuffer,
+        (int x, int y) startDoor,
+        (int x, int y) endDoor,
+        HashSet<(int x, int y)>? temporaryBlocked,
+        out List<(int x, int y)> path)
     {
         var open = new PriorityQueue<RouteNode, double>();
         var startNode = new RouteNode(start.x, start.y, 0);
@@ -413,12 +619,13 @@ public sealed class MapGenerator
             {
                 var nx = node.X + dx;
                 var ny = node.Y + dy;
-                if (!IsWalkable(map, nx, ny, allowDoor: true)) continue;
+                if (temporaryBlocked?.Contains((nx, ny)) == true) continue;
+                if (!IsWalkable(map, nx, ny, roomBuffer, startDoor, endDoor)) continue;
 
                 var nextDir = DirectionFromDelta(dx, dy);
                 var neighbor = new RouteNode(nx, ny, nextDir);
                 var turnPenalty = node.Direction != 0 && node.Direction != nextDir ? 0.2 : 0;
-                var existingPenalty = map.Cells[nx, ny] == CellType.Corridor ? -0.1 : 0;
+                var existingPenalty = map.Cells[nx, ny] == CellType.Corridor ? -0.2 : 0;
                 var tentative = gScore[node] + 1 + turnPenalty + existingPenalty;
 
                 if (gScore.TryGetValue(neighbor, out var known) && tentative >= known) continue;
@@ -434,6 +641,25 @@ public sealed class MapGenerator
         return false;
     }
 
+    private static bool IsWalkable(Map map, int x, int y, bool[,] roomBuffer, (int x, int y) startDoor, (int x, int y) endDoor)
+    {
+        if (!IsInside(map, x, y)) return false;
+        if ((x, y) == startDoor || (x, y) == endDoor) return true;
+        if (roomBuffer[x, y]) return false;
+
+        var cell = map.Cells[x, y];
+        return cell switch
+        {
+            CellType.Empty => true,
+            CellType.Corridor => true,
+            CellType.Gate => true,
+            _ => false
+        };
+    }
+
+    private static bool IsInside(Map map, int x, int y)
+        => x >= 0 && y >= 0 && x < map.WidthUnits && y < map.HeightUnits;
+
     private static List<RouteNode> ReconstructPath(Dictionary<RouteNode, RouteNode> cameFrom, RouteNode current)
     {
         var path = new List<RouteNode> { current };
@@ -447,130 +673,93 @@ public sealed class MapGenerator
         return path;
     }
 
-    private static int DirectionFromDelta(int dx, int dy)
+    private static int DirectionFromDelta(int dx, int dy) => (dx, dy) switch
     {
-        return (dx, dy) switch
-        {
-            (0, -1) => 1,
-            (1, 0) => 2,
-            (0, 1) => 3,
-            (-1, 0) => 4,
-            _ => 0
-        };
-    }
+        (0, -1) => 1,
+        (1, 0) => 2,
+        (0, 1) => 3,
+        (-1, 0) => 4,
+        _ => 0
+    };
 
-    private static bool IsWalkable(Map map, int x, int y, bool allowDoor)
+    private static void AddDoor(Map map, Room room, DoorCandidate candidate)
     {
-        if (x < 0 || y < 0 || x >= map.WidthUnits || y >= map.HeightUnits) return false;
-        var cell = map.Cells[x, y];
-        return cell switch
-        {
-            CellType.Empty => true,
-            CellType.Corridor => true,
-            CellType.Gate => true,
-            CellType.Door => allowDoor,
-            _ => false
-        };
-    }
+        if (room.Doors.Any(d => (int)d.Position.X == candidate.X && (int)d.Position.Y == candidate.Y)) return;
 
-    private static void AddDoorForRoute(Map map, Room room, (int x, int y) doorCell, (int x, int y) nextCell)
-    {
-        if (room.Doors.Any(d => (int)d.Position.X == doorCell.x && (int)d.Position.Y == doorCell.y)) return;
-
-        var direction = ComputeDirection(doorCell, nextCell);
         var door = new Door
         {
             BlockId = room.BlockId,
             RoomId = room.Id,
-            Position = new PointUnits(doorCell.x, doorCell.y),
-            Direction = direction
+            Position = new PointUnits(candidate.X, candidate.Y),
+            Direction = candidate.Direction
         };
 
         room.Doors.Add(door);
         map.Doors.Add(door);
-        MarkCell(map, door.Position, CellType.Door, force: true);
-    }
-
-    private static ConnectorDirection ComputeDirection((int x, int y) from, (int x, int y) to)
-    {
-        var dx = to.x - from.x;
-        var dy = to.y - from.y;
-        return (dx, dy) switch
-        {
-            (0, -1) => ConnectorDirection.North,
-            (1, 0) => ConnectorDirection.East,
-            (0, 1) => ConnectorDirection.South,
-            (-1, 0) => ConnectorDirection.West,
-            _ => ConnectorDirection.None
-        };
+        map.Cells[candidate.X, candidate.Y] = CellType.Door;
     }
 
     private static double ManhattanDistance(PointUnits a, PointUnits b) => Math.Abs(a.X - b.X) + Math.Abs(a.Y - b.Y);
 
-    private static void ValidateAndFix(Map map, GenerationSettings s, List<string> warnings)
+    private static void ValidateAndFix(Map map, GenerationSettings s, List<string> warnings, Random rng)
     {
         if (!s.ValidateConnectivity || map.Rooms.Count == 0) return;
 
-        var roomById = map.Rooms.ToDictionary(r => r.Id);
-        var doorMap = map.Doors.Where(d => roomById.ContainsKey(d.RoomId)).GroupBy(d => d.RoomId).ToDictionary(g => g.Key, g => g.ToList());
-        var visitedRooms = new HashSet<int>();
-        var queue = new Queue<(int x, int y)>();
-        var visitedCells = new HashSet<(int x, int y)>();
+        var reachable = GetReachableRooms(map);
+        if (reachable.Count == map.Rooms.Count) return;
 
-        var seedDoors = doorMap.Values.SelectMany(d => d).ToList();
-        if (seedDoors.Count == 0)
+        warnings.Add($"Связность комнат нарушена: достижимо {reachable.Count} из {map.Rooms.Count}.");
+        if (!s.AutoFixConnectivity) return;
+
+        var roomBuffer = BuildRoomBufferMap(map, s.CorridorWidthUnits);
+        var roomDoors = map.Rooms.ToDictionary(r => r.Id, r => BuildDoorCandidates(map, r));
+
+        var pending = map.Rooms.Where(r => !reachable.Contains(r.Id)).ToList();
+        foreach (var room in pending)
         {
-            warnings.Add("Нет дверей для проверки связности комнат.");
-            return;
-        }
+            var nearestReachable = map.Rooms
+                .Where(r => reachable.Contains(r.Id))
+                .OrderBy(r => ManhattanDistance(r.RectUnits.Center, room.RectUnits.Center))
+                .FirstOrDefault();
 
-        var startDoor = seedDoors[0];
-        queue.Enqueue(((int)startDoor.Position.X, (int)startDoor.Position.Y));
+            if (nearestReachable is null) continue;
+            if (TryConnectRoomsDoorToDoor(map, s, room, nearestReachable, roomDoors[room.Id], roomDoors[nearestReachable.Id], roomBuffer))
+            {
+                reachable.Add(room.Id);
+            }
+        }
+    }
+
+    private static HashSet<int> GetReachableRooms(Map map)
+    {
+        var visitedRooms = new HashSet<int>();
+        if (map.Doors.Count == 0) return visitedRooms;
+
+        var queue = new Queue<(int x, int y)>();
+        var seen = new HashSet<(int x, int y)>();
+        queue.Enqueue(((int)map.Doors[0].Position.X, (int)map.Doors[0].Position.Y));
 
         while (queue.Count > 0)
         {
-            var current = queue.Dequeue();
-            if (!visitedCells.Add(current)) continue;
+            var (x, y) = queue.Dequeue();
+            if (!seen.Add((x, y))) continue;
 
             foreach (var door in map.Doors)
             {
-                if ((int)door.Position.X == current.x && (int)door.Position.Y == current.y)
-                {
-                    visitedRooms.Add(door.RoomId);
-                }
+                if ((int)door.Position.X == x && (int)door.Position.Y == y) visitedRooms.Add(door.RoomId);
             }
 
             foreach (var (dx, dy, _) in CardinalDirections)
             {
-                var nx = current.x + dx;
-                var ny = current.y + dy;
-                if (!IsWalkable(map, nx, ny, allowDoor: true)) continue;
-                queue.Enqueue((nx, ny));
+                var nx = x + dx;
+                var ny = y + dy;
+                if (!IsInside(map, nx, ny)) continue;
+                var cell = map.Cells[nx, ny];
+                if (cell is CellType.Corridor or CellType.Door or CellType.Gate) queue.Enqueue((nx, ny));
             }
         }
 
-        if (visitedRooms.Count == map.Rooms.Count) return;
-
-        warnings.Add($"Связность комнат нарушена: достижимо {visitedRooms.Count} из {map.Rooms.Count}.");
-        if (!s.AutoFixConnectivity) return;
-
-        var unreachable = map.Rooms.Where(r => !visitedRooms.Contains(r.Id)).ToList();
-        foreach (var room in unreachable)
-        {
-            var nearestReachable = map.Rooms.Where(r => visitedRooms.Contains(r.Id)).OrderBy(r => ManhattanDistance(r.RectUnits.Center, room.RectUnits.Center)).FirstOrDefault();
-            if (nearestReachable is null) continue;
-
-            var start = PickConnectorPoint(room, nearestReachable);
-            var end = PickConnectorPoint(nearestReachable, room);
-            if (!TryBuildRoute(map, ((int)start.X, (int)start.Y), ((int)end.X, (int)end.Y), out var path)) continue;
-
-            var poly = path.Select(p => new PointUnits(p.x, p.y)).ToList();
-            map.Corridors.Add(new Corridor { Polyline = poly, WidthUnits = s.CorridorWidthUnits, IsTech = room.RoomType == RoomType.TechRoom });
-            RasterizePolyline(map, poly, s.CorridorWidthUnits, CellType.Corridor, false);
-            AddDoorForRoute(map, room, path[0], path.Count > 1 ? path[1] : path[0]);
-            AddDoorForRoute(map, nearestReachable, path[^1], path.Count > 1 ? path[^2] : path[^1]);
-            visitedRooms.Add(room.Id);
-        }
+        return visitedRooms;
     }
 
     private static void GenerateTrainLayout(Map map, GenerationSettings s, Random rng, GenerationContext context)
@@ -617,7 +806,7 @@ public sealed class MapGenerator
             PaintRect(map, room.RectUnits, CellType.Floor);
 
             var doorX = (int)Math.Round(room.RectUnits.Center.X);
-            var doorY = (int)room.RectUnits.Y;
+            var doorY = (int)room.RectUnits.Y - 1;
             var door = new Door
             {
                 BlockId = block.Id,
